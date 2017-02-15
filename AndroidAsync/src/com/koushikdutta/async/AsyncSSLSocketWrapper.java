@@ -13,7 +13,10 @@ import org.apache.http.conn.ssl.StrictHostnameVerifier;
 import java.nio.ByteBuffer;
 import java.security.GeneralSecurityException;
 import java.security.KeyStore;
+import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
+import java.security.cert.CertificateException;
+import java.security.cert.CertificateExpiredException;
 import java.security.cert.X509Certificate;
 
 import javax.net.ssl.HostnameVerifier;
@@ -49,6 +52,8 @@ public class AsyncSSLSocketWrapper implements AsyncSocketWrapper, AsyncSSLSocket
     DataCallback mDataCallback;
     TrustManager[] trustManagers;
     boolean clientMode;
+    static KeyStore appKeyStore;
+    static X509TrustManager defaultTrustManager;
 
     static {
         // following is the "trust the system" certs setup
@@ -64,20 +69,84 @@ public class AsyncSSLSocketWrapper implements AsyncSocketWrapper, AsyncSSLSocket
         }
         catch (Exception ex) {
             try {
+                TrustManagerFactory tmf = TrustManagerFactory.getInstance("X509");
+                tmf.init((KeyStore) null);
+
+                X509TrustManager x509TrustManager = null;
+                for (TrustManager t : tmf.getTrustManagers()) {
+                    if (t instanceof X509TrustManager) {
+                        x509TrustManager = (X509TrustManager)t;
+                    }
+                }
+
                 defaultSSLContext = SSLContext.getInstance("TLS");
+
+                appKeyStore = loadAppKeyStore();
+                final X509TrustManager finalX509TrustManager = x509TrustManager;
                 TrustManager[] trustAllCerts = new TrustManager[] { new X509TrustManager() {
-                    public java.security.cert.X509Certificate[] getAcceptedIssuers() {
-                        return new X509Certificate[0];
-                    }
-
-                    public void checkClientTrusted(java.security.cert.X509Certificate[] certs, String authType) {
-                    }
-
-                    public void checkServerTrusted(java.security.cert.X509Certificate[] certs, String authType) {
-                        for (X509Certificate cert : certs) {
-                            if (cert != null && cert.getCriticalExtensionOIDs() != null)
-                                cert.getCriticalExtensionOIDs().remove("2.5.29.15");
+                    private boolean isCertKnown(X509Certificate cert) {
+                        try {
+                            return appKeyStore.getCertificateAlias(cert) != null;
+                        } catch (KeyStoreException e) {
+                            return false;
                         }
+                    }
+
+                    private boolean isExpiredException(Throwable e) {
+                        do {
+                            if (e instanceof CertificateExpiredException)
+                                return true;
+                            e = e.getCause();
+                        } while (e != null);
+                        return false;
+                    }
+
+                    public void checkCertTrusted(X509Certificate[] chain, String authType, boolean isServer)
+                            throws CertificateException
+                    {
+                        //LOGGER.log(Level.FINE, "checkCertTrusted(" + chain + ", " + authType + ", " + isServer + ")");
+                        try {
+                            //LOGGER.log(Level.FINE, "checkCertTrusted: trying appTrustManager");
+                            if (isServer)
+                                finalX509TrustManager.checkServerTrusted(chain, authType);
+                            else
+                                finalX509TrustManager.checkClientTrusted(chain, authType);
+                        } catch (CertificateException ae) {
+                            //LOGGER.log(Level.FINER, "checkCertTrusted: appTrustManager failed", ae);
+                            // if the cert is stored in our appTrustManager, we ignore expiredness
+                            if (isExpiredException(ae)) {
+                                //LOGGER.log(Level.INFO, "checkCertTrusted: accepting expired certificate from keystore");
+                                return;
+                            }
+                            if (isCertKnown(chain[0])) {
+                                //LOGGER.log(Level.INFO, "checkCertTrusted: accepting cert already stored in keystore");
+                                return;
+                            }
+                            try {
+                                if (defaultTrustManager == null)
+                                    throw ae;
+                                //LOGGER.log(Level.FINE, "checkCertTrusted: trying defaultTrustManager");
+                                if (isServer)
+                                    defaultTrustManager.checkServerTrusted(chain, authType);
+                                else
+                                    defaultTrustManager.checkClientTrusted(chain, authType);
+                            } catch (CertificateException e) {
+                                e.printStackTrace();
+                                throw e;
+                            }
+                        }
+                    }
+
+                    public java.security.cert.X509Certificate[] getAcceptedIssuers() {
+                        return finalX509TrustManager.getAcceptedIssuers();
+                    }
+
+                    public void checkClientTrusted(java.security.cert.X509Certificate[] certs, String authType) throws CertificateException {
+                        checkCertTrusted(certs, authType, false);
+                    }
+
+                    public void checkServerTrusted(java.security.cert.X509Certificate[] certs, String authType) throws CertificateException {
+                        checkCertTrusted(certs, authType, true);
                     }
                 } };
                 defaultSSLContext.init(null, trustAllCerts, null);
@@ -87,6 +156,22 @@ public class AsyncSSLSocketWrapper implements AsyncSocketWrapper, AsyncSSLSocket
                 ex2.printStackTrace();
             }
         }
+    }
+
+    public static KeyStore loadAppKeyStore() {
+        KeyStore ks;
+        try {
+            ks = KeyStore.getInstance(KeyStore.getDefaultType());
+        } catch (KeyStoreException e) {
+            return null;
+        }
+        try {
+            ks.load(null, null);
+            //ks.load(new java.io.FileInputStream(keyStoreFile), "MTM".toCharArray());
+        } catch (java.io.FileNotFoundException e) {
+        } catch (Exception e) {
+        }
+        return ks;
     }
 
     public static SSLContext getDefaultSSLContext() {
