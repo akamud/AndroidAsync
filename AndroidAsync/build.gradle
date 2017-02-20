@@ -34,3 +34,16 @@ android {
 if (System.getenv().I_AM_KOUSH == 'true') {
   apply from: 'https://raw.githubusercontent.com/koush/mvn-repo/master/maven.gradle'
 }
+
+task clearJar(type: Delete) {
+    delete 'build/outputs/AndroidAsync.jar'
+}
+
+task makeJar(type: Copy) {
+    from('build/intermediates/bundles/release/')
+    into('build/outputs/')
+    include('classes.jar')
+    rename ('classes.jar', 'AndroidAsync.jar')
+}
+
+makeJar.dependsOn(clearJar, build)

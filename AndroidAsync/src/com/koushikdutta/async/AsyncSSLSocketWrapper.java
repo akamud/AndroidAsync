@@ -104,28 +104,22 @@ public class AsyncSSLSocketWrapper implements AsyncSocketWrapper, AsyncSSLSocket
                     public void checkCertTrusted(X509Certificate[] chain, String authType, boolean isServer)
                             throws CertificateException
                     {
-                        //LOGGER.log(Level.FINE, "checkCertTrusted(" + chain + ", " + authType + ", " + isServer + ")");
                         try {
-                            //LOGGER.log(Level.FINE, "checkCertTrusted: trying appTrustManager");
                             if (isServer)
                                 finalX509TrustManager.checkServerTrusted(chain, authType);
                             else
                                 finalX509TrustManager.checkClientTrusted(chain, authType);
                         } catch (CertificateException ae) {
-                            //LOGGER.log(Level.FINER, "checkCertTrusted: appTrustManager failed", ae);
                             // if the cert is stored in our appTrustManager, we ignore expiredness
                             if (isExpiredException(ae)) {
-                                //LOGGER.log(Level.INFO, "checkCertTrusted: accepting expired certificate from keystore");
                                 return;
                             }
                             if (isCertKnown(chain[0])) {
-                                //LOGGER.log(Level.INFO, "checkCertTrusted: accepting cert already stored in keystore");
                                 return;
                             }
                             try {
                                 if (defaultTrustManager == null)
                                     throw ae;
-                                //LOGGER.log(Level.FINE, "checkCertTrusted: trying defaultTrustManager");
                                 if (isServer)
                                     defaultTrustManager.checkServerTrusted(chain, authType);
                                 else
